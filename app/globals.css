@@ -1,26 +1,133 @@
 @import "tailwindcss";
 
+/* =========================
+   Nigel's Clarity Space (#GRWN)
+   Tailwind v4 compatible
+   ========================= */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --cs-bg: #e9efe9;
+  --cs-card: #f6faf6;
+  --cs-text: #0f2b1f;
+  --cs-muted: #3f5b4c;
+  --cs-border: rgba(15, 43, 31, 0.14);
+
+  --cs-brand: #2f6b4f;
+  --cs-brand-light: #4aa374;
+
+  --cs-good: #2f6b4f;
+  --cs-warn: #b7791f;
+  --cs-risk: #b42318;
+
+  /* Keep these for Tailwind theme inline mapping */
+  --background: var(--cs-bg);
+  --foreground: var(--cs-text);
 }
 
+/* Tailwind v4 theme tokens */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--cs-bg);
+  color: var(--cs-text);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+}
+
+::selection {
+  background: rgba(74, 163, 116, 0.25);
+}
+
+/* =========================
+   Lightweight custom classes (NO @apply in v4)
+   ========================= */
+
+.cs-card {
+  border: 1px solid var(--cs-border);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 1px 8px rgba(15, 43, 31, 0.06);
+}
+
+.cs-input {
+  width: 100%;
+  border: 1px solid var(--cs-border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: #fff;
+  outline: none;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.cs-input:focus {
+  box-shadow: 0 0 0 2px rgba(47, 107, 79, 0.25);
+  border-color: rgba(47, 107, 79, 0.35);
+}
+
+.cs-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-weight: 600;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.cs-btn-primary {
+  background: var(--cs-text);
+  color: #fff;
+}
+
+.cs-btn-primary:hover {
+  opacity: 0.92;
+}
+
+.cs-btn-ghost {
+  border: 1px solid var(--cs-border);
+  background: #fff;
+  color: var(--cs-text);
+}
+
+.cs-btn-ghost:hover {
+  background: var(--cs-card);
+}
+
+.cs-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--cs-border);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.cs-badge-good {
+  color: var(--cs-good);
+  border-color: rgba(47, 107, 79, 0.35);
+  background: rgba(74, 163, 116, 0.12);
+}
+
+.cs-badge-warn {
+  color: #7c4a12;
+  border-color: rgba(183, 121, 31, 0.38);
+  background: rgba(183, 121, 31, 0.12);
+}
+
+.cs-badge-risk {
+  color: var(--cs-risk);
+  border-color: rgba(180, 35, 24, 0.38);
+  background: rgba(180, 35, 24, 0.10);
 }
