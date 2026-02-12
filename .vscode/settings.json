@@ -1,0 +1,12 @@
+{
+  "files.watcherExclude": {
+    "**/.next/**": true
+  },
+  "files.exclude": {
+    "**/.next": true
+  },
+  "typescript.tsserver.exclude": [
+    "**/.next/**"
+  ],
+  "css.lint.unknownAtRules": "ignore"
+}
