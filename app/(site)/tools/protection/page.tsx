@@ -2,15 +2,7 @@
 export const dynamic = "force-dynamic";
 
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Legend,
-} from "recharts";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
 
 type Gender = "male" | "female" | "unspecified";
 type MoneyMode = "monthly" | "annual";
@@ -32,9 +24,24 @@ type Outputs = {
   exDeath: number;
   exTPD: number;
   exCI: number;
-
-  riskLabel: "LOW" | "MODERATE" | "RISK";
 };
+
+const STEP_ORDER: StepKey[] = ["profile", "needs", "existing", "results"];
+
+const SG_LE_AT_BIRTH_2024 = {
+  male: 81.2,
+  female: 85.6,
+  overall: 83.5,
+};
+
+const SOURCES = {
+  singstatLifeTables: "https://www.singstat.gov.sg/-/media/files/publications/population/lifetable23-24.ashx",
+  moneysenseBfpg: "https://www.moneysense.gov.sg/planning-your-finances-well/",
+};
+
+function cx(...s: Array<string | false | null | undefined>) {
+  return s.filter(Boolean).join(" ");
+}
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -57,72 +64,375 @@ function formatMoneySGD(n: number) {
   return Math.max(0, Math.round(n)).toLocaleString("en-SG");
 }
 
-function formatMoney(n: number) {
-  return formatMoneySGD(n);
+function niceToolLabel(tool: string) {
+  const t = (tool || "").toLowerCase();
+  if (t === "protection") return "Protection Gap Check";
+  return "Protection Gap Check";
 }
 
-function riskFromProfile(totalGap: number, annualEssentials: number, dependents: number) {
-  const base = totalGap / Math.max(1, annualEssentials);
-  const depBoost = dependents >= 2 ? 1.25 : dependents === 1 ? 1.12 : 1;
-  const score = base * depBoost;
+function computeOutputs(args: {
+  annualEssentials: number;
+  supportYears: number;
+  cashBuffer: number;
+  debts: number;
+  essentialsStillNeededPct: number;
+  tpdYearsCover: number;
+  ciMonthsOff: number;
+  ciExtra: number;
+  exDeath: number;
+  exTPD: number;
+  exCI: number;
+}): Outputs | null {
+  const a = Math.max(0, args.annualEssentials);
+  const y = Math.max(0, args.supportYears);
+  if (a <= 0 || y <= 0) return null;
 
-  if (score <= 6) return "LOW";
-  if (score <= 14) return "MODERATE";
-  return "RISK";
+  const cashBuffer = Math.max(0, args.cashBuffer);
+  const debts = Math.max(0, args.debts);
+  const ciExtra = Math.max(0, args.ciExtra);
+
+  const exDeath = Math.max(0, args.exDeath);
+  const exTPD = Math.max(0, args.exTPD);
+  const exCI = Math.max(0, args.exCI);
+
+  const deathNeed = a * y + cashBuffer + debts;
+
+  const essentialsStillNeededPct = clamp(args.essentialsStillNeededPct, 0, 100) / 100;
+  const tpdNeed = a * Math.max(0, args.tpdYearsCover) * essentialsStillNeededPct;
+
+  const ciNeed = (a / 12) * Math.max(0, args.ciMonthsOff) + ciExtra;
+
+  const deathGap = Math.max(deathNeed - exDeath, 0);
+  const tpdGap = Math.max(tpdNeed - exTPD, 0);
+  const ciGap = Math.max(ciNeed - exCI, 0);
+
+  return {
+    annualEssentials: a,
+    supportYears: y,
+    deathNeed,
+    tpdNeed,
+    ciNeed,
+    deathGap,
+    tpdGap,
+    ciGap,
+    totalGap: deathGap + tpdGap + ciGap,
+    exDeath,
+    exTPD,
+    exCI,
+  };
 }
 
-function badgeClass(risk: Outputs["riskLabel"]) {
-  if (risk === "LOW") return "cs-badge cs-badge-good";
-  if (risk === "MODERATE") return "cs-badge cs-badge-warn";
-  return "cs-badge cs-badge-risk";
+function Surface(props: { className?: string; children: React.ReactNode }) {
+  return (
+    <div
+      className={cx(
+        "relative overflow-hidden rounded-[34px] border border-[var(--cs-border)] bg-white/70 backdrop-blur",
+        "shadow-[0_18px_60px_rgba(15,43,31,0.08)]",
+        props.className
+      )}
+    >
+      {props.children}
+    </div>
+  );
 }
 
-function softRiskTone(risk: Outputs["riskLabel"]) {
-  if (risk === "LOW") return "text-emerald-700";
-  if (risk === "MODERATE") return "text-amber-700";
-  return "text-rose-700";
+function SoftGlow() {
+  return (
+    <>
+      <div className="absolute -top-44 -left-44 h-[560px] w-[560px] rounded-full bg-[rgba(0,184,148,0.10)] blur-3xl" />
+      <div className="absolute -bottom-48 -right-48 h-[620px] w-[620px] rounded-full bg-[rgba(108,92,231,0.12)] blur-3xl" />
+    </>
+  );
 }
 
-const SG_LE_AT_BIRTH_2024 = {
-  male: 81.2,
-  female: 85.6,
-  overall: 83.5,
-};
+function Badge(props: { text: string; dot?: boolean }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-[var(--cs-border)] bg-white/70 px-3 py-1 text-xs font-semibold text-[var(--cs-muted)]">
+      {props.dot ? <span className="h-1.5 w-1.5 rounded-full bg-[var(--cs-brand)]" /> : null}
+      {props.text}
+    </span>
+  );
+}
 
-const SOURCES = {
-  singstatLifeTables:
-    "https://www.singstat.gov.sg/-/media/files/publications/population/lifetable23-24.ashx",
-  moneysenseBfpg: "https://www.moneysense.gov.sg/planning-your-finances-well/",
-};
+function SectionTitle(props: { title: string; subtitle?: string; right?: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
+      <div className="space-y-1">
+        <div className="text-lg sm:text-xl font-extrabold tracking-tight">{props.title}</div>
+        {props.subtitle ? <div className="text-sm text-[var(--cs-muted)] leading-relaxed">{props.subtitle}</div> : null}
+      </div>
+      {props.right ? <div className="shrink-0">{props.right}</div> : null}
+    </div>
+  );
+}
 
-const STEP_ORDER: StepKey[] = ["profile", "needs", "existing", "results"];
+function FieldShell(props: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <div className="text-sm font-semibold">{props.label}</div>
+      {props.children}
+      {props.hint ? <div className="text-xs text-[var(--cs-muted)] leading-relaxed">{props.hint}</div> : null}
+    </div>
+  );
+}
+
+function PrefixMoneyInput(props: { valueRaw: string; setValueRaw: (v: string) => void; placeholder?: string }) {
+  const display = props.valueRaw ? formatMoneySGD(parseMoney(props.valueRaw)) : "";
+  return (
+    <div className="flex items-center gap-2 rounded-2xl border border-[var(--cs-border)] bg-white/85 px-3 py-3 focus-within:ring-2 focus-within:ring-[rgba(47,107,79,0.18)]">
+      <div className="text-sm font-semibold text-[var(--cs-muted)]">$</div>
+      <input
+        inputMode="numeric"
+        className="w-full outline-none bg-transparent text-[var(--cs-text)]"
+        value={display}
+        onChange={(e) => props.setValueRaw(stripToDigits(e.target.value))}
+        placeholder={props.placeholder || "e.g. 50,000"}
+      />
+    </div>
+  );
+}
+
+function SimpleNumberInput(props: { valueRaw: string; setValueRaw: (v: string) => void; placeholder?: string }) {
+  return (
+    <div className="rounded-2xl border border-[var(--cs-border)] bg-white/85 px-3 py-3 focus-within:ring-2 focus-within:ring-[rgba(47,107,79,0.18)]">
+      <input
+        inputMode="numeric"
+        className="w-full outline-none bg-transparent text-[var(--cs-text)]"
+        value={props.valueRaw}
+        onChange={(e) => props.setValueRaw(stripToDigits(e.target.value))}
+        placeholder={props.placeholder || "e.g. 20"}
+      />
+    </div>
+  );
+}
+
+function Segmented(props: {
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <div className="inline-flex items-center rounded-2xl border border-[var(--cs-border)] bg-white/75 p-1">
+      {props.options.map((o) => {
+        const active = props.value === o.value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => props.onChange(o.value)}
+            className={cx(
+              "px-3 py-2 rounded-xl text-sm font-semibold transition",
+              active ? "bg-[var(--cs-text)] text-white" : "text-[var(--cs-text)] hover:bg-[var(--cs-card)]"
+            )}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function StepTabs(props: { step: StepKey; canGo: (k: StepKey) => boolean; onGo: (k: StepKey) => void }) {
+  const items: Array<{ k: StepKey; label: string; sub: string }> = [
+    { k: "profile", label: "Profile", sub: "Basics + hint" },
+    { k: "needs", label: "Needs", sub: "What to protect" },
+    { k: "existing", label: "Existing", sub: "What you have" },
+    { k: "results", label: "Results", sub: "Snapshot" },
+  ];
+
+  const idx = STEP_ORDER.indexOf(props.step);
+
+  return (
+    <div className="rounded-[28px] border border-[var(--cs-border)] bg-white/70 p-2">
+      <div className="grid gap-2 sm:grid-cols-4">
+        {items.map((s, i) => {
+          const active = i === idx;
+          const done = i < idx;
+          const allowed = props.canGo(s.k);
+
+          return (
+            <button
+              key={s.k}
+              type="button"
+              onClick={() => props.onGo(s.k)}
+              disabled={!allowed}
+              className={cx(
+                "text-left rounded-2xl px-3 py-3 transition",
+                active
+                  ? "bg-white shadow-[0_14px_40px_rgba(15,43,31,0.10)]"
+                  : "hover:bg-white/70",
+                !allowed && !active ? "opacity-45 cursor-not-allowed" : ""
+              )}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-extrabold truncate">{s.label}</div>
+                  <div className="text-xs text-[var(--cs-muted)] mt-0.5 truncate">{s.sub}</div>
+                </div>
+                <div
+                  className={cx(
+                    "h-9 w-9 rounded-2xl flex items-center justify-center border shrink-0",
+                    active
+                      ? "bg-[color:var(--cs-card)/0.70] border-[var(--cs-border)]"
+                      : done
+                      ? "bg-emerald-50 border-emerald-100"
+                      : "bg-white/70 border-[var(--cs-border)]"
+                  )}
+                >
+                  <span className="text-sm">{done ? "✓" : active ? "●" : "○"}</span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StatChip(props: { label: string; value: string; tone?: "good" | "warn" | "risk" }) {
+  const tone =
+    props.tone === "good"
+      ? "text-emerald-700 bg-emerald-50 border-emerald-100"
+      : props.tone === "warn"
+      ? "text-amber-700 bg-amber-50 border-amber-100"
+      : props.tone === "risk"
+      ? "text-rose-700 bg-rose-50 border-rose-100"
+      : "text-[var(--cs-text)] bg-[var(--cs-card)] border-[var(--cs-border)]";
+
+  return (
+    <div className={cx("rounded-2xl border px-4 py-3", tone)}>
+      <div className="text-[10px] uppercase tracking-wide opacity-80">{props.label}</div>
+      <div className="text-lg font-extrabold tracking-tight">{props.value}</div>
+    </div>
+  );
+}
+
+function CategorySnapshotCard(props: {
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  need: number;
+  existing: number;
+  gap: number;
+  why: string;
+  accent: "green" | "purple" | "rose";
+}) {
+  const accentBorder =
+    props.accent === "green"
+      ? "border-emerald-100"
+      : props.accent === "purple"
+      ? "border-violet-100"
+      : "border-rose-100";
+
+  const accentBg =
+    props.accent === "green"
+      ? "bg-emerald-50"
+      : props.accent === "purple"
+      ? "bg-violet-50"
+      : "bg-rose-50";
+
+  const gapTone = props.gap > 0 ? "risk" : "good";
+
+  return (
+    <Surface className={cx("p-6", accentBorder)}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className={cx("h-11 w-11 rounded-2xl border border-[var(--cs-border)] flex items-center justify-center", accentBg)}>
+            {props.icon}
+          </div>
+          <div className="min-w-0">
+            <div className="text-base font-extrabold tracking-tight truncate">{props.title}</div>
+            <div className="text-xs text-[var(--cs-muted)] mt-0.5">{props.subtitle}</div>
+          </div>
+        </div>
+        <span className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border border-[var(--cs-border)] bg-white/70">
+          Estimate
+        </span>
+      </div>
+
+      <div className="mt-5 grid grid-cols-3 gap-3">
+        <StatChip label="Need" value={`$${formatMoneySGD(props.need)}`} />
+        <StatChip label="Coverage" value={`$${formatMoneySGD(props.existing)}`} tone="good" />
+        <StatChip label="Shortfall" value={`$${formatMoneySGD(props.gap)}`} tone={gapTone} />
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-[var(--cs-border)] bg-white/75 p-4">
+        <div className="text-[10px] uppercase tracking-wide text-[var(--cs-muted)]">Why this number</div>
+        <div className="mt-1 text-sm font-semibold text-[var(--cs-text)]">{props.why}</div>
+      </div>
+    </Surface>
+  );
+}
+
+function CoverageBars(props: { rows: Array<{ name: string; coverage: number; shortfall: number }> }) {
+  const fmt = (n: number) => `$${formatMoneySGD(n)}`;
+
+  return (
+    <Surface className="p-6">
+      <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
+        <div>
+          <div className="text-sm font-semibold">Coverage summary</div>
+          <div className="text-xs text-[var(--cs-muted)] mt-1">Stacked: coverage + shortfall</div>
+        </div>
+        <div className="flex items-center gap-3 text-xs text-[var(--cs-muted)]">
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/60" />
+            Coverage
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-rose-500/60" />
+            Shortfall
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 h-[260px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={props.rows} layout="vertical" margin={{ top: 6, right: 16, left: 8, bottom: 6 }}>
+            <XAxis
+              type="number"
+              tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`}
+              stroke="rgba(36,20,48,0.35)"
+              fontSize={12}
+            />
+            <YAxis type="category" dataKey="name" width={140} stroke="rgba(36,20,48,0.35)" fontSize={12} />
+            <Tooltip formatter={(value: any, name: any) => [fmt(Number(value)), String(name)]} cursor={{ fill: "rgba(36,20,48,0.06)" }} />
+            <Bar dataKey="coverage" stackId="a" fill="rgba(16,185,129,0.70)" radius={[10, 10, 10, 10]} />
+            <Bar dataKey="shortfall" stackId="a" fill="rgba(244,63,94,0.70)" radius={[10, 10, 10, 10]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </Surface>
+  );
+}
 
 export default function ProtectionGapTool() {
   const [step, setStep] = useState<StepKey>("profile");
-
   const [moneyMode, setMoneyMode] = useState<MoneyMode>("monthly");
 
-  const [ageRaw, setAgeRaw] = useState<string>("");
+  const [ageRaw, setAgeRaw] = useState("");
   const [gender, setGender] = useState<Gender>("unspecified");
   const [dependents, setDependents] = useState<number>(0);
 
-  const [essentialsRaw, setEssentialsRaw] = useState<string>("");
-  const [supportYearsRaw, setSupportYearsRaw] = useState<string>("");
+  const [essentialsRaw, setEssentialsRaw] = useState("");
+  const [supportYearsRaw, setSupportYearsRaw] = useState("");
 
-  const [cashBufferRaw, setCashBufferRaw] = useState<string>("");
-  const [debtsRaw, setDebtsRaw] = useState<string>("");
+  const [cashBufferRaw, setCashBufferRaw] = useState("");
+  const [debtsRaw, setDebtsRaw] = useState("");
 
-  const [replaceEssentialsPct, setReplaceEssentialsPct] = useState<number>(60);
+  const [essentialsStillNeededPct, setEssentialsStillNeededPct] = useState<number>(60);
   const [tpdYearsCover, setTpdYearsCover] = useState<number>(10);
 
   const [ciMonthsOff, setCiMonthsOff] = useState<number>(24);
   const [ciExtraBufferRaw, setCiExtraBufferRaw] = useState<string>("20000");
 
-  const [existingDeathRaw, setExistingDeathRaw] = useState<string>("");
-  const [existingTPDRaw, setExistingTPDRaw] = useState<string>("");
-  const [existingCIRaw, setExistingCIRaw] = useState<string>("");
+  const [existingDeathRaw, setExistingDeathRaw] = useState("");
+  const [existingTPDRaw, setExistingTPDRaw] = useState("");
+  const [existingCIRaw, setExistingCIRaw] = useState("");
 
-  const [showBenchmarks, setShowBenchmarks] = useState<boolean>(true);
+  const [showBenchmarks, setShowBenchmarks] = useState(true);
 
   const age = useMemo(() => Number(stripToDigits(ageRaw || "0")) || 0, [ageRaw]);
 
@@ -139,7 +449,8 @@ export default function ProtectionGapTool() {
   }, [age, lifeExpectancyHint]);
 
   const suggestedSupportYears = useMemo(() => {
-    if (dependents >= 1) return 20;
+    if (dependents >= 2) return 20;
+    if (dependents === 1) return 18;
     return 15;
   }, [dependents]);
 
@@ -153,76 +464,38 @@ export default function ProtectionGapTool() {
     return Math.max(0, v * 12);
   }, [essentialsRaw, moneyMode]);
 
-  const supportYears = useMemo(() => {
-    const y = Number(stripToDigits(supportYearsRaw || "0")) || 0;
-    return Math.max(0, y);
-  }, [supportYearsRaw]);
+  const supportYears = useMemo(() => Number(stripToDigits(supportYearsRaw || "0")) || 0, [supportYearsRaw]);
 
-  const outputs: Outputs | null = useMemo(() => {
-    if (annualEssentials <= 0 || supportYears <= 0) return null;
-
-    const cashBuffer = Math.max(0, parseMoney(cashBufferRaw));
-    const debts = Math.max(0, parseMoney(debtsRaw));
-    const ciExtra = Math.max(0, parseMoney(ciExtraBufferRaw));
-
-    const exDeath = Math.max(0, parseMoney(existingDeathRaw));
-    const exTPD = Math.max(0, parseMoney(existingTPDRaw));
-    const exCI = Math.max(0, parseMoney(existingCIRaw));
-
-    const deathNeed = annualEssentials * supportYears + cashBuffer + debts;
-
-    const tpdNeed =
-      annualEssentials *
-      Math.max(0, tpdYearsCover) *
-      (clamp(replaceEssentialsPct, 0, 100) / 100);
-
-    const ciNeed = (annualEssentials / 12) * Math.max(0, ciMonthsOff) + ciExtra;
-
-    const deathGap = Math.max(deathNeed - exDeath, 0);
-    const tpdGap = Math.max(tpdNeed - exTPD, 0);
-    const ciGap = Math.max(ciNeed - exCI, 0);
-
-    const totalGap = deathGap + tpdGap + ciGap;
-
-    return {
+  const outputs = useMemo(() => {
+    return computeOutputs({
       annualEssentials,
       supportYears,
-
-      deathNeed,
-      tpdNeed,
-      ciNeed,
-
-      deathGap,
-      tpdGap,
-      ciGap,
-      totalGap,
-
-      exDeath,
-      exTPD,
-      exCI,
-
-      riskLabel: riskFromProfile(totalGap, annualEssentials, dependents),
-    };
+      cashBuffer: parseMoney(cashBufferRaw),
+      debts: parseMoney(debtsRaw),
+      essentialsStillNeededPct,
+      tpdYearsCover,
+      ciMonthsOff,
+      ciExtra: parseMoney(ciExtraBufferRaw),
+      exDeath: parseMoney(existingDeathRaw),
+      exTPD: parseMoney(existingTPDRaw),
+      exCI: parseMoney(existingCIRaw),
+    });
   }, [
     annualEssentials,
     supportYears,
     cashBufferRaw,
     debtsRaw,
-    replaceEssentialsPct,
+    essentialsStillNeededPct,
     tpdYearsCover,
     ciMonthsOff,
     ciExtraBufferRaw,
     existingDeathRaw,
     existingTPDRaw,
     existingCIRaw,
-    dependents,
   ]);
 
   const canGoNeeds = useMemo(() => age > 0, [age]);
-  const canGoExisting = useMemo(
-    () => annualEssentials > 0 && supportYears > 0,
-    [annualEssentials, supportYears]
-  );
+  const canGoExisting = useMemo(() => annualEssentials > 0 && supportYears > 0, [annualEssentials, supportYears]);
   const canGoResults = useMemo(() => Boolean(outputs), [outputs]);
 
   useEffect(() => {
@@ -236,56 +509,52 @@ export default function ProtectionGapTool() {
     return clamp(((idx + 1) / STEP_ORDER.length) * 100, 0, 100);
   }, [step]);
 
-  const titleLine = useMemo(() => {
-    if (!outputs) return "Protection Gap Check";
-    return `Protection Gap Check • ${outputs.riskLabel}`;
+  const summaryText = useMemo(() => {
+    if (!outputs) return "";
+    return [
+      `${niceToolLabel("protection")}`,
+      `Annual essentials $${formatMoneySGD(outputs.annualEssentials)}`,
+      `Death shortfall $${formatMoneySGD(outputs.deathGap)}`,
+      `TPD shortfall $${formatMoneySGD(outputs.tpdGap)}`,
+      `CI shortfall $${formatMoneySGD(outputs.ciGap)}`,
+      `Total shortfall $${formatMoneySGD(outputs.totalGap)}`,
+    ].join(" • ");
   }, [outputs]);
 
-  const topHint = useMemo(() => {
-    if (!outputs) return "Key in a few basics — you’ll get a clean, educational snapshot (not advice).";
-    if (outputs.riskLabel === "LOW") return "Looks reasonably covered for the assumptions used.";
-    if (outputs.riskLabel === "MODERATE") return "Some gaps show up — usually worth tightening the basics.";
-    return "Large gaps detected — treat this as a starting point for a proper review.";
+  const chartRows = useMemo(() => {
+    if (!outputs) return [];
+    const rows = [
+      { name: "Death", need: outputs.deathNeed, ex: outputs.exDeath },
+      { name: "Disability (TPD)", need: outputs.tpdNeed, ex: outputs.exTPD },
+      { name: "Critical Illness", need: outputs.ciNeed, ex: outputs.exCI },
+    ];
+    return rows.map((r) => {
+      const need = Math.max(0, r.need);
+      const coverage = clamp(Math.max(0, r.ex), 0, need);
+      const shortfall = Math.max(need - coverage, 0);
+      return { name: r.name, coverage, shortfall };
+    });
   }, [outputs]);
 
   const benchmark = useMemo(() => {
     if (!outputs) return null;
-    const annual = outputs.annualEssentials;
     return {
-      deathTpdThumb: annual * 9,
-      ciThumb: annual * 4,
-      premiumRule: "15% of income",
+      deathTpdThumb: outputs.annualEssentials * 9,
+      ciThumb: outputs.annualEssentials * 4,
     };
   }, [outputs]);
 
-  const summaryText = useMemo(() => {
-    if (!outputs) return "";
-    return [
-      `Protection Gap Check`,
-      `Annual essentials $${formatMoney(outputs.annualEssentials)}`,
-      `Death shortfall $${formatMoney(outputs.deathGap)}`,
-      `TPD shortfall $${formatMoney(outputs.tpdGap)}`,
-      `CI shortfall $${formatMoney(outputs.ciGap)}`,
-      `Total shortfall $${formatMoney(outputs.totalGap)}`,
-      `Risk ${outputs.riskLabel}`,
-    ].join(" • ");
-  }, [outputs]);
-
-  const readiness = useMemo(() => {
-    const missing: string[] = [];
-    if (age <= 0) missing.push("Age");
-    if (annualEssentials <= 0) missing.push(moneyMode === "monthly" ? "Monthly essentials" : "Annual essentials");
-    if (supportYears <= 0) missing.push("Support years");
-    return { missing, ready: missing.length === 0 };
-  }, [age, annualEssentials, supportYears, moneyMode]);
+  function canGo(k: StepKey) {
+    if (k === "profile") return true;
+    if (k === "needs") return canGoNeeds;
+    if (k === "existing") return canGoExisting;
+    return canGoResults;
+  }
 
   function goNext() {
     const idx = STEP_ORDER.indexOf(step);
     const next = STEP_ORDER[Math.min(idx + 1, STEP_ORDER.length - 1)];
-    if (next === "needs" && !canGoNeeds) return;
-    if (next === "existing" && !canGoExisting) return;
-    if (next === "results" && !canGoResults) return;
-    setStep(next);
+    if (canGo(next)) setStep(next);
   }
 
   function goBack() {
@@ -294,220 +563,132 @@ export default function ProtectionGapTool() {
     setStep(prev);
   }
 
-  const chartItems = useMemo(() => {
-    if (!outputs) return [];
-    return [
-      { key: "Death", need: outputs.deathNeed, existing: outputs.exDeath },
-      { key: "Disability (TPD)", need: outputs.tpdNeed, existing: outputs.exTPD },
-      { key: "Critical Illness", need: outputs.ciNeed, existing: outputs.exCI },
-    ].map((x) => {
-      const need = Math.max(0, x.need);
-      const ex = clamp(Math.max(0, x.existing), 0, need);
-      const gap = Math.max(need - ex, 0);
-      return { name: x.key, Coverage: ex, Shortfall: gap };
-    });
-  }, [outputs]);
-
   return (
     <div className="min-h-[calc(100vh-40px)] bg-transparent">
-      <div className="mx-auto w-full max-w-none px-4 sm:px-6 lg:px-10 2xl:px-14 py-6 space-y-5">
-        <div className="mx-auto w-full max-w-[1680px] space-y-5">
+      <div className="mx-auto w-full max-w-none px-4 sm:px-6 lg:px-10 2xl:px-14 py-6 space-y-6">
+        <div className="mx-auto w-full max-w-[1680px] space-y-6">
           <a href="/tools" className="text-sm text-[var(--cs-muted)] hover:underline">
             ← Back to tools
           </a>
 
-          <div
-            className={[
-              "relative overflow-hidden rounded-[34px]",
-              "border border-[color:var(--cs-border)]",
-              "bg-gradient-to-br from-white via-white to-[color:var(--cs-card)/0.65]",
-              "shadow-[0_18px_45px_rgba(0,0,0,0.08)]",
-            ].join(" ")}
-          >
-            <div className="absolute -top-36 -left-24 h-80 w-80 rounded-full bg-[rgba(108,92,231,0.16)] blur-3xl" />
-            <div className="absolute -bottom-36 -right-24 h-80 w-80 rounded-full bg-[rgba(0,184,148,0.14)] blur-3xl" />
+          <Surface className="bg-gradient-to-br from-white via-white to-[color:var(--cs-card)/0.65]">
+            <SoftGlow />
 
-            <div className="relative p-6 sm:p-8">
-              <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_460px] lg:items-start">
-                <div className="space-y-3">
+            <div className="relative p-6 sm:p-10">
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_460px] lg:items-start">
+                <div className="space-y-4">
                   <div className="flex flex-wrap gap-2">
-                    <span className="cs-badge">Educational self-check</span>
-                    <span className="cs-badge">No product names</span>
-                    <span className="cs-badge">Simple assumptions</span>
+                    <Badge text="Educational self-check" dot />
+                    <Badge text="No product names" />
+                    <Badge text="Singapore context" />
                   </div>
 
-                  <div className="flex items-end gap-3 flex-wrap">
-                    <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">{titleLine}</h1>
-                    {outputs ? <span className={badgeClass(outputs.riskLabel)}>{outputs.riskLabel}</span> : null}
+                  <div className="space-y-2">
+                    <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">Protection Gap Check</h1>
+                    <p className="text-[var(--cs-muted)] max-w-2xl leading-relaxed">
+                      A clean snapshot of possible shortfalls across Death / Disability (TPD) / Critical Illness. General information only — not financial advice and not a recommendation.
+                    </p>
                   </div>
 
-                  <p className="text-[var(--cs-muted)] max-w-2xl leading-relaxed">
-                    {topHint} This tool is general information only — not financial advice and not a recommendation.
-                  </p>
-
-                  <Stepper
-                    step={step}
-                    onGo={(k) => {
-                      if (k === "profile") return setStep("profile");
-                      if (k === "needs") return setStep(canGoNeeds ? "needs" : "profile");
-                      if (k === "existing") return setStep(canGoExisting ? "existing" : "needs");
-                      if (k === "results") return setStep(canGoResults ? "results" : "existing");
-                    }}
-                  />
+                  <StepTabs step={step} canGo={canGo} onGo={(k) => setStep(canGo(k) ? k : step)} />
                 </div>
 
-                <div className="w-full">
-                  <div className="rounded-[26px] bg-white/70 backdrop-blur border border-[color:var(--cs-border)] shadow-[0_10px_25px_rgba(0,0,0,0.06)] p-5">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold">Progress</div>
-                      <div className="text-xs text-[var(--cs-muted)]">{Math.round(progress)}%</div>
-                    </div>
-
-                    <div className="mt-3 h-2.5 rounded-full bg-[color:var(--cs-card)/0.85] overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-[var(--cs-accent, #6C5CE7)]"
-                        style={{ width: `${progress}%`, transition: "width 300ms ease" }}
-                      />
-                    </div>
-
-                    <div className="mt-4 flex items-center gap-2">
-                      <div className="text-xs text-[var(--cs-muted)]">Input mode</div>
-                      <div className="ml-auto flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setMoneyMode("monthly")}
-                          className={[
-                            "px-3 py-1.5 rounded-2xl text-xs border transition",
-                            moneyMode === "monthly"
-                              ? "bg-[color:var(--cs-card)/0.9] border-[color:var(--cs-border)]"
-                              : "bg-white/70 border-[color:var(--cs-border)] hover:bg-[color:var(--cs-card)/0.9]",
-                          ].join(" ")}
-                        >
-                          Monthly
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMoneyMode("annual")}
-                          className={[
-                            "px-3 py-1.5 rounded-2xl text-xs border transition",
-                            moneyMode === "annual"
-                              ? "bg-[color:var(--cs-card)/0.9] border-[color:var(--cs-border)]"
-                              : "bg-white/70 border-[color:var(--cs-border)] hover:bg-[color:var(--cs-card)/0.9]",
-                          ].join(" ")}
-                        >
-                          Per year
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 rounded-2xl bg-[color:var(--cs-card)/0.5] border border-[color:var(--cs-border)] p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="text-sm font-semibold">Readiness</div>
-                        <span
-                          className={
-                            readiness.ready
-                              ? "text-emerald-700 text-xs font-semibold"
-                              : "text-amber-700 text-xs font-semibold"
-                          }
-                        >
-                          {readiness.ready ? "Ready ✓" : "Almost"}
-                        </span>
-                      </div>
-
-                      {readiness.ready ? (
-                        <div className="mt-2 text-xs text-[var(--cs-muted)] leading-relaxed">
-                          You can proceed to Results anytime. Existing cover is optional (blank = $0).
-                        </div>
-                      ) : (
-                        <div className="mt-2 text-xs text-[var(--cs-muted)] leading-relaxed">
-                          Missing:{" "}
-                          <span className="font-semibold text-[var(--cs-text)]">{readiness.missing.join(", ")}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="mt-4 text-xs text-[var(--cs-muted)] leading-relaxed">
-                      Tip: Start rough. You can refine numbers later — the goal is clarity, not perfection.
-                    </div>
+                <Surface className="p-5">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold">Progress</div>
+                    <div className="text-xs text-[var(--cs-muted)]">{Math.round(progress)}%</div>
                   </div>
-                </div>
+
+                  <div className="mt-3 h-2.5 rounded-full bg-[color:var(--cs-card)/0.85] overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-[var(--cs-brand)]"
+                      style={{ width: `${progress}%`, transition: "width 300ms ease" }}
+                    />
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <div className="text-xs text-[var(--cs-muted)]">Input mode</div>
+                    <Segmented
+                      value={moneyMode}
+                      onChange={(v) => setMoneyMode(v as MoneyMode)}
+                      options={[
+                        { value: "monthly", label: "Monthly" },
+                        { value: "annual", label: "Per year" },
+                      ]}
+                    />
+                  </div>
+
+                  {outputs ? (
+                    <div className="mt-4 rounded-3xl border border-[var(--cs-border)] bg-white/80 p-5">
+                      <div className="text-xs text-[var(--cs-muted)]">Total estimated shortfall</div>
+                      <div className="mt-1 text-3xl font-extrabold tracking-tight">${formatMoneySGD(outputs.totalGap)}</div>
+                      <div className="text-xs text-[var(--cs-muted)] mt-1">Educational estimate from your inputs.</div>
+                      <div className="mt-4 grid grid-cols-3 gap-2">
+                        <div className="rounded-2xl border border-[var(--cs-border)] bg-white/80 p-3">
+                          <div className="text-[10px] uppercase tracking-wide text-[var(--cs-muted)]">Death</div>
+                          <div className="text-sm font-extrabold">${formatMoneySGD(outputs.deathGap)}</div>
+                        </div>
+                        <div className="rounded-2xl border border-[var(--cs-border)] bg-white/80 p-3">
+                          <div className="text-[10px] uppercase tracking-wide text-[var(--cs-muted)]">TPD</div>
+                          <div className="text-sm font-extrabold">${formatMoneySGD(outputs.tpdGap)}</div>
+                        </div>
+                        <div className="rounded-2xl border border-[var(--cs-border)] bg-white/80 p-3">
+                          <div className="text-[10px] uppercase tracking-wide text-[var(--cs-muted)]">CI</div>
+                          <div className="text-sm font-extrabold">${formatMoneySGD(outputs.ciGap)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 rounded-3xl border border-[var(--cs-border)] bg-white/80 p-5">
+                      <div className="text-xs text-[var(--cs-muted)]">Tip</div>
+                      <div className="mt-1 text-sm font-semibold text-[var(--cs-text)]">
+                        Start rough. You can refine later — the goal is clarity, not perfection.
+                      </div>
+                      <div className="mt-3 text-xs text-[var(--cs-muted)] leading-relaxed">
+                        Recommended flow: age → essentials → support years → CI months → TPD slider.
+                      </div>
+                    </div>
+                  )}
+                </Surface>
               </div>
             </div>
-          </div>
+          </Surface>
 
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_460px] lg:items-start">
-            <div className="space-y-5">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_460px] lg:items-start">
+            <div className="space-y-6">
               {step === "profile" ? (
-                <div className="cs-card p-6 sm:p-8 rounded-[30px] space-y-7 shadow-[0_18px_45px_rgba(0,0,0,0.06)]">
-                  <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-                    <div className="space-y-1">
-                      <div className="text-lg font-bold tracking-tight">Profile</div>
-                      <div className="text-sm text-[var(--cs-muted)]">
-                        Just enough to keep the tool human-friendly. Optional hints only.
-                      </div>
-                    </div>
+                <Surface className="p-6 sm:p-10">
+                  <SectionTitle
+                    title="Profile"
+                    subtitle="Age + gender gives an optional SingStat life expectancy hint (not a personal prediction)."
+                  />
 
-                    <div className="relative">
-                      <div className="h-14 w-14 rounded-3xl bg-white/70 border border-[color:var(--cs-border)] flex items-center justify-center shadow-[0_10px_25px_rgba(0,0,0,0.06)]">
-                        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path
-                            d="M12 21s-7-4.35-9.33-9.07C.66 7.64 3.02 4.5 6.5 4.5c1.74 0 3.22.8 4.1 2.02C11.28 5.3 12.76 4.5 14.5 4.5c3.48 0 5.84 3.14 3.83 7.43C19 16.65 12 21 12 21z"
-                            stroke="rgba(36,20,48,0.7)"
-                            strokeWidth="1.6"
-                          />
-                          <path
-                            d="M8.5 12h2l1-2.2 1.2 4.2 1.1-2h1.7"
-                            stroke="rgba(108,92,231,0.9)"
-                            strokeWidth="1.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      </div>
-                      <div className="absolute -inset-2 rounded-[28px] border border-[rgba(108,92,231,0.16)]" />
-                    </div>
-                  </div>
+                  <div className="mt-7 grid gap-5 sm:grid-cols-3">
+                    <FieldShell label="Age" hint="Used only for the optional hint below.">
+                      <SimpleNumberInput valueRaw={ageRaw} setValueRaw={setAgeRaw} placeholder="e.g. 25" />
+                    </FieldShell>
 
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <label className="space-y-1">
-                      <div className="text-sm font-semibold">Age</div>
-                      <input
-                        inputMode="numeric"
-                        className="cs-input"
-                        value={ageRaw}
-                        onChange={(e) => setAgeRaw(stripToDigits(e.target.value))}
-                        placeholder="e.g. 25"
-                      />
-                      <div className="text-xs text-[var(--cs-muted)]">Used only for an optional life-expectancy hint.</div>
-                    </label>
-
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <div className="text-sm font-semibold">Gender</div>
-                      <div className="flex gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         <button
                           type="button"
                           onClick={() => setGender("male")}
-                          className={["cs-btn w-full", gender === "male" ? "cs-btn-primary" : "cs-btn-ghost"].join(" ")}
+                          className={cx("cs-btn w-full", gender === "male" ? "cs-btn-primary" : "cs-btn-ghost")}
                         >
                           Male
                         </button>
                         <button
                           type="button"
                           onClick={() => setGender("female")}
-                          className={[
-                            "cs-btn w-full",
-                            gender === "female" ? "cs-btn-primary" : "cs-btn-ghost",
-                          ].join(" ")}
+                          className={cx("cs-btn w-full", gender === "female" ? "cs-btn-primary" : "cs-btn-ghost")}
                         >
                           Female
                         </button>
                         <button
                           type="button"
                           onClick={() => setGender("unspecified")}
-                          className={[
-                            "cs-btn w-full",
-                            gender === "unspecified" ? "cs-btn-primary" : "cs-btn-ghost",
-                          ].join(" ")}
+                          className={cx("cs-btn w-full", gender === "unspecified" ? "cs-btn-primary" : "cs-btn-ghost")}
                         >
                           Skip
                         </button>
@@ -530,20 +711,23 @@ export default function ProtectionGapTool() {
                         </div>
                       ) : (
                         <div className="text-xs text-[var(--cs-muted)]">
-                          Optional hint uses SingStat life tables (not a personal prediction).
+                          Optional hint uses SingStat life tables (2023–2024).{" "}
+                          <a className="underline" href={SOURCES.singstatLifeTables} target="_blank" rel="noreferrer">
+                            View
+                          </a>
                         </div>
                       )}
                     </div>
 
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <div className="text-sm font-semibold">Dependents</div>
-                      <div className="flex gap-2">
+                      <div className="grid grid-cols-4 gap-2">
                         {[0, 1, 2, 3].map((n) => (
                           <button
                             key={n}
                             type="button"
                             onClick={() => setDependents(n)}
-                            className={["cs-btn w-full", dependents === n ? "cs-btn-primary" : "cs-btn-ghost"].join(" ")}
+                            className={cx("cs-btn w-full", dependents === n ? "cs-btn-primary" : "cs-btn-ghost")}
                           >
                             {n === 3 ? "3+" : String(n)}
                           </button>
@@ -553,239 +737,202 @@ export default function ProtectionGapTool() {
                     </div>
                   </div>
 
-                  <div className="rounded-[26px] bg-[color:var(--cs-card)/0.5] border border-[color:var(--cs-border)] p-5">
-                    <div className="text-sm font-semibold">Mini explainer (plain English)</div>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                      <div className="rounded-2xl bg-white/70 border border-[color:var(--cs-border)] p-4">
+                  <div className="mt-7 rounded-[30px] border border-[var(--cs-border)] bg-[color:var(--cs-card)/0.55] p-6">
+                    <div className="text-sm font-semibold">Plain English: what this checks</div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-3xl bg-white/75 border border-[var(--cs-border)] p-5">
                         <div className="text-xs text-[var(--cs-muted)]">Death</div>
-                        <div className="text-sm font-semibold text-[var(--cs-text)]">Family support</div>
+                        <div className="text-sm font-extrabold text-[var(--cs-text)]">Family support</div>
                         <div className="text-xs text-[var(--cs-muted)] mt-1">Money they may need if you’re gone.</div>
                       </div>
-                      <div className="rounded-2xl bg-white/70 border border-[color:var(--cs-border)] p-4">
-                        <div className="text-xs text-[var(--cs-muted)]">TPD</div>
-                        <div className="text-sm font-semibold text-[var(--cs-text)]">Can’t work</div>
-                        <div className="text-xs text-[var(--cs-muted)] mt-1">Replace essentials partially for some years.</div>
+                      <div className="rounded-3xl bg-white/75 border border-[var(--cs-border)] p-5">
+                        <div className="text-xs text-[var(--cs-muted)]">Disability (TPD)</div>
+                        <div className="text-sm font-extrabold text-[var(--cs-text)]">Income stops</div>
+                        <div className="text-xs text-[var(--cs-muted)] mt-1">How long essentials still need funding.</div>
                       </div>
-                      <div className="rounded-2xl bg-white/70 border border-[color:var(--cs-border)] p-4">
+                      <div className="rounded-3xl bg-white/75 border border-[var(--cs-border)] p-5">
                         <div className="text-xs text-[var(--cs-muted)]">Critical Illness</div>
-                        <div className="text-sm font-semibold text-[var(--cs-text)]">Off work + buffer</div>
-                        <div className="text-xs text-[var(--cs-muted)] mt-1">Cash cushion during treatment + recovery.</div>
+                        <div className="text-sm font-extrabold text-[var(--cs-text)]">Time off work</div>
+                        <div className="text-xs text-[var(--cs-muted)] mt-1">Cash cushion during recovery.</div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+                  <div className="mt-7 flex flex-col sm:flex-row gap-2 sm:justify-end">
                     <button type="button" className="cs-btn cs-btn-primary" onClick={goNext} disabled={!canGoNeeds}>
                       Next
                     </button>
                   </div>
-                </div>
+                </Surface>
               ) : null}
 
               {step === "needs" ? (
-                <div className="cs-card p-6 sm:p-8 rounded-[30px] space-y-7 shadow-[0_18px_45px_rgba(0,0,0,0.06)]">
-                  <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-                    <div className="space-y-1">
-                      <div className="text-lg font-bold tracking-tight">Your needs</div>
-                      <div className="text-sm text-[var(--cs-muted)]">Keep it simple. You can refine later — this is a clarity tool.</div>
-                    </div>
-
-                    <div className="flex gap-2">
+                <Surface className="p-6 sm:p-10">
+                  <SectionTitle
+                    title="Your needs"
+                    subtitle="Key in essentials + how long you want to protect them for. Keep it simple — refine later."
+                    right={
                       <button type="button" className="cs-btn cs-btn-ghost" onClick={() => setShowBenchmarks((v) => !v)}>
                         {showBenchmarks ? "Hide benchmarks" : "Show benchmarks"}
                       </button>
-                    </div>
-                  </div>
+                    }
+                  />
 
-                  <div className="rounded-[26px] bg-white/70 border border-[color:var(--cs-border)] p-5 space-y-4">
-                    <div className="text-sm font-semibold">1) Essentials (must-pay)</div>
+                  <div className="mt-7 grid gap-5">
+                    <div className="rounded-[30px] bg-white/70 border border-[var(--cs-border)] p-6">
+                      <div className="text-sm font-semibold">1) Essentials (must-pay)</div>
 
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <label className="space-y-1">
-                        <div className="text-sm font-semibold">
-                          {moneyMode === "monthly" ? "Monthly essential expenses (SGD)" : "Annual essential expenses (SGD)"}
-                        </div>
-                        <div className="relative">
-                          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--cs-muted)] text-sm">$</div>
-                          <input
-                            inputMode="numeric"
-                            className="cs-input pl-7"
-                            value={essentialsRaw ? formatMoneySGD(parseMoney(essentialsRaw)) : ""}
-                            onChange={(e) => setEssentialsRaw(stripToDigits(e.target.value))}
+                      <div className="mt-5 grid gap-5 sm:grid-cols-2">
+                        <FieldShell
+                          label={moneyMode === "monthly" ? "Monthly essential expenses (SGD)" : "Annual essential expenses (SGD)"}
+                          hint="Rent/mortgage, bills, food, parents allowance, kids costs, loan repayments."
+                        >
+                          <PrefixMoneyInput
+                            valueRaw={essentialsRaw}
+                            setValueRaw={setEssentialsRaw}
                             placeholder={moneyMode === "monthly" ? "e.g. 3,000" : "e.g. 36,000"}
                           />
-                        </div>
-                        <div className="text-xs text-[var(--cs-muted)]">
-                          Rent/mortgage, bills, food, parents allowance, kids costs, loan repayments.
-                        </div>
-                      </label>
+                        </FieldShell>
 
-                      <label className="space-y-1">
-                        <div className="text-sm font-semibold">Support duration (years)</div>
-                        <input
-                          inputMode="numeric"
-                          className="cs-input"
-                          value={supportYearsRaw}
-                          onChange={(e) => setSupportYearsRaw(stripToDigits(e.target.value))}
-                          placeholder="e.g. 20"
-                        />
-                        <div className="text-xs text-[var(--cs-muted)]">Default set based on dependents. Common range: 10–25.</div>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="rounded-[26px] bg-white/70 border border-[color:var(--cs-border)] p-5 space-y-4">
-                    <div className="text-sm font-semibold">2) One-time items (optional)</div>
-
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <label className="space-y-1">
-                        <div className="text-sm font-semibold">Immediate cash buffer (optional)</div>
-                        <div className="relative">
-                          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--cs-muted)] text-sm">$</div>
-                          <input
-                            inputMode="numeric"
-                            className="cs-input pl-7"
-                            value={cashBufferRaw ? formatMoneySGD(parseMoney(cashBufferRaw)) : ""}
-                            onChange={(e) => setCashBufferRaw(stripToDigits(e.target.value))}
-                            placeholder="e.g. 30,000"
-                          />
-                        </div>
-                        <div className="text-xs text-[var(--cs-muted)]">Funeral + 3–6 months breathing room.</div>
-                      </label>
-
-                      <label className="space-y-1">
-                        <div className="text-sm font-semibold">Outstanding debts to clear (optional)</div>
-                        <div className="relative">
-                          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--cs-muted)] text-sm">$</div>
-                          <input
-                            inputMode="numeric"
-                            className="cs-input pl-7"
-                            value={debtsRaw ? formatMoneySGD(parseMoney(debtsRaw)) : ""}
-                            onChange={(e) => setDebtsRaw(stripToDigits(e.target.value))}
-                            placeholder="e.g. 120,000"
-                          />
-                        </div>
-                        <div className="text-xs text-[var(--cs-muted)]">Loans you don’t want family to inherit.</div>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <div className="rounded-[26px] bg-white/70 border border-[color:var(--cs-border)] p-6">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold">3) If you can’t work (TPD)</div>
-                          <div className="text-xs text-[var(--cs-muted)] mt-1">How much of essentials still need replacing?</div>
-                        </div>
-                        <span className="cs-badge">Adjustable</span>
-                      </div>
-
-                      <div className="mt-5 space-y-4">
-                        <div>
-                          <div className="text-sm font-semibold">Replace essentials: {replaceEssentialsPct}%</div>
-                          <input
-                            type="range"
-                            min={30}
-                            max={100}
-                            value={replaceEssentialsPct}
-                            onChange={(e) => setReplaceEssentialsPct(Number(e.target.value))}
-                            className="w-full mt-2"
-                          />
-                          <div className="text-xs text-[var(--cs-muted)] mt-2">Starter range: 50–70% for most people.</div>
-                        </div>
-
-                        <div>
-                          <div className="text-sm font-semibold">For how long: {tpdYearsCover} years</div>
-                          <input
-                            type="range"
-                            min={1}
-                            max={Math.max(5, Math.min(40, yearsRemainingHint ? Math.round(yearsRemainingHint) : 30))}
-                            value={tpdYearsCover}
-                            onChange={(e) => setTpdYearsCover(Number(e.target.value))}
-                            className="w-full mt-2"
-                          />
-                          <div className="text-xs text-[var(--cs-muted)] mt-2">If unsure: 5–10 years is a common starting point.</div>
-                        </div>
+                        <FieldShell label="Support duration (years)" hint="Default adjusts with dependents. Common range: 10–25.">
+                          <SimpleNumberInput valueRaw={supportYearsRaw} setValueRaw={setSupportYearsRaw} placeholder="e.g. 20" />
+                        </FieldShell>
                       </div>
                     </div>
 
-                    <div className="rounded-[26px] bg-white/70 border border-[color:var(--cs-border)] p-6">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold">4) If you fall seriously ill (CI)</div>
-                          <div className="text-xs text-[var(--cs-muted)] mt-1">How long might you be off work?</div>
-                        </div>
-                        <span className="cs-badge">Adjustable</span>
+                    <div className="rounded-[30px] bg-white/70 border border-[var(--cs-border)] p-6">
+                      <div className="text-sm font-semibold">2) One-time items (optional)</div>
+
+                      <div className="mt-5 grid gap-5 sm:grid-cols-2">
+                        <FieldShell label="Immediate cash buffer" hint="Funeral + short breathing room for the first months.">
+                          <PrefixMoneyInput valueRaw={cashBufferRaw} setValueRaw={setCashBufferRaw} placeholder="e.g. 30,000" />
+                        </FieldShell>
+
+                        <FieldShell label="Debts to clear" hint="Loans you don’t want family to inherit.">
+                          <PrefixMoneyInput valueRaw={debtsRaw} setValueRaw={setDebtsRaw} placeholder="e.g. 120,000" />
+                        </FieldShell>
                       </div>
+                    </div>
 
-                      <div className="mt-5 space-y-4">
-                        <div>
-                          <div className="text-sm font-semibold">{ciMonthsOff} months off</div>
-                          <input
-                            type="range"
-                            min={6}
-                            max={60}
-                            step={6}
-                            value={ciMonthsOff}
-                            onChange={(e) => setCiMonthsOff(Number(e.target.value))}
-                            className="w-full mt-2"
-                          />
-                          <div className="text-xs text-[var(--cs-muted)] mt-2">Common starter: 12–24 months.</div>
+                    <div className="grid gap-5 lg:grid-cols-2">
+                      <div className="rounded-[30px] bg-white/70 border border-[var(--cs-border)] p-6">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold">3) If you can’t work (Disability / TPD)</div>
+                            <div className="text-xs text-[var(--cs-muted)] mt-1">
+                              Some expenses stop — but many essentials still continue.
+                            </div>
+                          </div>
+                          <Badge text="Scenario" />
                         </div>
 
-                        <label className="space-y-1">
-                          <div className="text-sm font-semibold">Extra out-of-pocket buffer (optional)</div>
-                          <div className="relative">
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--cs-muted)] text-sm">$</div>
+                        <div className="mt-6 space-y-6">
+                          <div className="space-y-2">
+                            <div className="text-sm font-semibold">How much of essentials still continue?</div>
+                            <div className="text-xs text-[var(--cs-muted)]">
+                              If unsure, start around 60%.
+                            </div>
+                            <div className="mt-2 flex items-center justify-between text-xs text-[var(--cs-muted)]">
+                              <span>Lower</span>
+                              <span className="font-semibold text-[var(--cs-text)]">{essentialsStillNeededPct}%</span>
+                              <span>Higher</span>
+                            </div>
                             <input
-                              inputMode="numeric"
-                              className="cs-input pl-7"
-                              value={ciExtraBufferRaw ? formatMoneySGD(parseMoney(ciExtraBufferRaw)) : ""}
-                              onChange={(e) => setCiExtraBufferRaw(stripToDigits(e.target.value))}
-                              placeholder="e.g. 20,000"
+                              type="range"
+                              min={30}
+                              max={100}
+                              value={essentialsStillNeededPct}
+                              onChange={(e) => setEssentialsStillNeededPct(Number(e.target.value))}
+                              className="w-full"
                             />
                           </div>
-                          <div className="text-xs text-[var(--cs-muted)]">Transport, caregiver costs, misc non-covered expenses.</div>
-                        </label>
-                      </div>
-                    </div>
-                  </div>
 
-                  {showBenchmarks ? (
-                    <div className="rounded-[26px] bg-[color:var(--cs-card)/0.55] border border-[color:var(--cs-border)] p-6">
-                      <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-                        <div className="space-y-1">
-                          <div className="text-sm font-semibold">Benchmarks (optional reference)</div>
-                          <div className="text-sm text-[var(--cs-muted)]">
-                            Based on MoneySense “rules of thumb”. Your situation can be different.
+                          <div className="space-y-2">
+                            <div className="text-sm font-semibold">For how many years?</div>
+                            <div className="mt-2 flex items-center justify-between text-xs text-[var(--cs-muted)]">
+                              <span>Short</span>
+                              <span className="font-semibold text-[var(--cs-text)]">{tpdYearsCover} years</span>
+                              <span>Long</span>
+                            </div>
+                            <input
+                              type="range"
+                              min={1}
+                              max={Math.max(5, Math.min(40, yearsRemainingHint ? Math.round(yearsRemainingHint) : 30))}
+                              value={tpdYearsCover}
+                              onChange={(e) => setTpdYearsCover(Number(e.target.value))}
+                              className="w-full"
+                            />
                           </div>
                         </div>
-                        <a className="cs-btn cs-btn-ghost" href={SOURCES.moneysenseBfpg} target="_blank" rel="noreferrer">
-                          View source
-                        </a>
                       </div>
 
-                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                        <div className="rounded-2xl bg-white/75 border border-[color:var(--cs-border)] p-4">
-                          <div className="text-xs text-[var(--cs-muted)]">Death & TPD</div>
-                          <div className="text-lg font-bold">9× annual</div>
-                          <div className="text-xs text-[var(--cs-muted)] mt-1">Basic thumb rule.</div>
+                      <div className="rounded-[30px] bg-white/70 border border-[var(--cs-border)] p-6">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold">4) If you fall seriously ill (Critical Illness)</div>
+                            <div className="text-xs text-[var(--cs-muted)] mt-1">
+                              Simple “time off work” estimate + optional extra buffer.
+                            </div>
+                          </div>
+                          <Badge text="Scenario" />
                         </div>
-                        <div className="rounded-2xl bg-white/75 border border-[color:var(--cs-border)] p-4">
-                          <div className="text-xs text-[var(--cs-muted)]">Critical illness</div>
-                          <div className="text-lg font-bold">4× annual</div>
-                          <div className="text-xs text-[var(--cs-muted)] mt-1">Basic thumb rule.</div>
-                        </div>
-                        <div className="rounded-2xl bg-white/75 border border-[color:var(--cs-border)] p-4">
-                          <div className="text-xs text-[var(--cs-muted)]">Spend guideline</div>
-                          <div className="text-lg font-bold">Up to 15%</div>
-                          <div className="text-xs text-[var(--cs-muted)] mt-1">Of income (guide only).</div>
+
+                        <div className="mt-6 space-y-6">
+                          <div className="space-y-2">
+                            <div className="text-sm font-semibold">How long might you be off work?</div>
+                            <div className="mt-2 flex items-center justify-between text-xs text-[var(--cs-muted)]">
+                              <span>Short</span>
+                              <span className="font-semibold text-[var(--cs-text)]">{ciMonthsOff} months</span>
+                              <span>Long</span>
+                            </div>
+                            <input
+                              type="range"
+                              min={6}
+                              max={60}
+                              step={6}
+                              value={ciMonthsOff}
+                              onChange={(e) => setCiMonthsOff(Number(e.target.value))}
+                              className="w-full"
+                            />
+                            <div className="text-xs text-[var(--cs-muted)]">Common starting point: 12–24 months.</div>
+                          </div>
+
+                          <FieldShell label="Extra out-of-pocket buffer" hint="Transport, caregiver costs, misc non-covered expenses.">
+                            <PrefixMoneyInput valueRaw={ciExtraBufferRaw} setValueRaw={setCiExtraBufferRaw} placeholder="e.g. 20,000" />
+                          </FieldShell>
                         </div>
                       </div>
                     </div>
-                  ) : null}
 
-                  <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
+                    {showBenchmarks && outputs && benchmark ? (
+                      <div className="rounded-[30px] bg-[color:var(--cs-card)/0.60] border border-[var(--cs-border)] p-6">
+                        <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
+                          <div className="space-y-1">
+                            <div className="text-sm font-semibold">Optional benchmarks (MoneySense)</div>
+                            <div className="text-sm text-[var(--cs-muted)]">Rules of thumb for reference only. Your situation can differ.</div>
+                          </div>
+                          <a className="cs-btn cs-btn-ghost" href={SOURCES.moneysenseBfpg} target="_blank" rel="noreferrer">
+                            View source
+                          </a>
+                        </div>
+
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-3xl bg-white/75 border border-[var(--cs-border)] p-5">
+                            <div className="text-xs text-[var(--cs-muted)]">Death & TPD thumb rule</div>
+                            <div className="text-xl font-extrabold">${formatMoneySGD(benchmark.deathTpdThumb)}</div>
+                            <div className="text-xs text-[var(--cs-muted)] mt-1">About 9× annual essentials (reference only).</div>
+                          </div>
+                          <div className="rounded-3xl bg-white/75 border border-[var(--cs-border)] p-5">
+                            <div className="text-xs text-[var(--cs-muted)]">Critical illness thumb rule</div>
+                            <div className="text-xl font-extrabold">${formatMoneySGD(benchmark.ciThumb)}</div>
+                            <div className="text-xs text-[var(--cs-muted)] mt-1">About 4× annual essentials (reference only).</div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-7 flex flex-col sm:flex-row gap-2 sm:justify-between">
                     <button type="button" className="cs-btn cs-btn-ghost" onClick={goBack}>
                       Back
                     </button>
@@ -793,75 +940,43 @@ export default function ProtectionGapTool() {
                       Next
                     </button>
                   </div>
-                </div>
+                </Surface>
               ) : null}
 
               {step === "existing" ? (
-                <div className="cs-card p-6 sm:p-8 rounded-[30px] space-y-7 shadow-[0_18px_45px_rgba(0,0,0,0.06)]">
-                  <div className="space-y-1">
-                    <div className="text-lg font-bold tracking-tight">Existing cover</div>
-                    <div className="text-sm text-[var(--cs-muted)]">
-                      Optional — but it makes the gap snapshot more accurate. Leave blank if unsure.
-                    </div>
+                <Surface className="p-6 sm:p-10">
+                  <SectionTitle
+                    title="Existing cover (optional)"
+                    subtitle="If you know your current coverage, it makes the snapshot clearer. Leave blank if unsure."
+                  />
+
+                  <div className="mt-7 grid gap-5 sm:grid-cols-3">
+                    <FieldShell label="Death" hint="Total coverage amount (all insurers combined).">
+                      <PrefixMoneyInput valueRaw={existingDeathRaw} setValueRaw={setExistingDeathRaw} placeholder="e.g. 500,000" />
+                    </FieldShell>
+
+                    <FieldShell label="Disability (TPD)" hint="Use the total TPD sum assured if known.">
+                      <PrefixMoneyInput valueRaw={existingTPDRaw} setValueRaw={setExistingTPDRaw} placeholder="e.g. 500,000" />
+                    </FieldShell>
+
+                    <FieldShell label="Critical Illness" hint="If you have multiple plans, add them up.">
+                      <PrefixMoneyInput valueRaw={existingCIRaw} setValueRaw={setExistingCIRaw} placeholder="e.g. 200,000" />
+                    </FieldShell>
                   </div>
 
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <label className="space-y-1">
-                      <div className="text-sm font-semibold">Death (SGD)</div>
-                      <div className="relative">
-                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--cs-muted)] text-sm">$</div>
-                        <input
-                          inputMode="numeric"
-                          className="cs-input pl-7"
-                          value={existingDeathRaw ? formatMoneySGD(parseMoney(existingDeathRaw)) : ""}
-                          onChange={(e) => setExistingDeathRaw(stripToDigits(e.target.value))}
-                          placeholder="e.g. 500,000"
-                        />
-                      </div>
-                    </label>
-
-                    <label className="space-y-1">
-                      <div className="text-sm font-semibold">TPD (SGD)</div>
-                      <div className="relative">
-                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--cs-muted)] text-sm">$</div>
-                        <input
-                          inputMode="numeric"
-                          className="cs-input pl-7"
-                          value={existingTPDRaw ? formatMoneySGD(parseMoney(existingTPDRaw)) : ""}
-                          onChange={(e) => setExistingTPDRaw(stripToDigits(e.target.value))}
-                          placeholder="e.g. 500,000"
-                        />
-                      </div>
-                    </label>
-
-                    <label className="space-y-1">
-                      <div className="text-sm font-semibold">Critical Illness (SGD)</div>
-                      <div className="relative">
-                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--cs-muted)] text-sm">$</div>
-                        <input
-                          inputMode="numeric"
-                          className="cs-input pl-7"
-                          value={existingCIRaw ? formatMoneySGD(parseMoney(existingCIRaw)) : ""}
-                          onChange={(e) => setExistingCIRaw(stripToDigits(e.target.value))}
-                          placeholder="e.g. 200,000"
-                        />
-                      </div>
-                    </label>
-                  </div>
-
-                  <div className="rounded-[26px] bg-[color:var(--cs-card)/0.55] border border-[color:var(--cs-border)] p-6">
-                    <div className="text-sm font-semibold">Quick tips (avoid confusion)</div>
+                  <div className="mt-7 rounded-[30px] bg-[color:var(--cs-card)/0.60] border border-[var(--cs-border)] p-6">
+                    <div className="text-sm font-semibold">Quick guidance</div>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <span className="cs-badge">Use total coverage amount</span>
-                      <span className="cs-badge">Include all companies</span>
-                      <span className="cs-badge">Blank = $0 (still works)</span>
+                      <Badge text="Blank = $0 (still works)" />
+                      <Badge text="Use total coverage amount" />
+                      <Badge text="Include all companies" />
                     </div>
                     <div className="mt-3 text-sm text-[var(--cs-muted)] leading-relaxed">
-                      If you’re unsure, it’s totally fine to leave it blank. You’ll still see a “needs” estimate.
+                      If you’re unsure, just leave it blank — you’ll still see a “needs” estimate.
                     </div>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
+                  <div className="mt-7 flex flex-col sm:flex-row gap-2 sm:justify-between">
                     <button type="button" className="cs-btn cs-btn-ghost" onClick={goBack}>
                       Back
                     </button>
@@ -869,104 +984,58 @@ export default function ProtectionGapTool() {
                       Show results
                     </button>
                   </div>
-                </div>
+                </Surface>
               ) : null}
 
               {step === "results" ? (
-                <div className="cs-card p-6 sm:p-8 rounded-[30px] space-y-6 shadow-[0_18px_45px_rgba(0,0,0,0.06)]">
-                  <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-                    <div className="space-y-1">
-                      <div className="text-lg font-bold tracking-tight">Results</div>
-                      <div className="text-sm text-[var(--cs-muted)]">Coverage vs shortfall view. General information only — not advice.</div>
-                    </div>
-
-                    {outputs ? (
-                      <div className="flex items-center gap-3">
-                        <span className={badgeClass(outputs.riskLabel)}>{outputs.riskLabel}</span>
-                        <div className="rounded-2xl bg-[color:var(--cs-card)/0.6] border border-[color:var(--cs-border)] px-4 py-2">
-                          <div className="text-xs text-[var(--cs-muted)]">Total shortfall</div>
-                          <div className={["text-lg font-bold tracking-tight", softRiskTone(outputs.riskLabel)].join(" ")}>
-                            ${formatMoney(outputs.totalGap)}
+                <div className="space-y-6">
+                  <Surface className="p-6 sm:p-10">
+                    <SectionTitle
+                      title="Results snapshot"
+                      subtitle="Educational estimate from your inputs. Not advice, and not a product recommendation."
+                      right={
+                        outputs ? (
+                          <div className="rounded-3xl border border-[var(--cs-border)] bg-white/75 px-5 py-3">
+                            <div className="text-[10px] uppercase tracking-wide text-[var(--cs-muted)]">Total shortfall</div>
+                            <div className="text-2xl font-extrabold tracking-tight">${formatMoneySGD(outputs.totalGap)}</div>
                           </div>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
+                        ) : null
+                      }
+                    />
 
-                  {!outputs ? (
-                    <div className="text-sm text-[var(--cs-muted)]">Please complete your inputs first.</div>
-                  ) : (
-                    <>
-                      <div className="grid gap-4 xl:grid-cols-2">
-                        <HeroCoverageChart
-                          items={[
-                            { key: "Death", need: outputs.deathNeed, existing: outputs.exDeath, accent: "purple" },
-                            { key: "Disability (TPD)", need: outputs.tpdNeed, existing: outputs.exTPD, accent: "teal" },
-                            { key: "Critical Illness", need: outputs.ciNeed, existing: outputs.exCI, accent: "rose" },
-                          ]}
-                        />
-                        <CoverageBarChart items={chartItems} />
-                      </div>
+                    {!outputs ? (
+                      <div className="mt-4 text-sm text-[var(--cs-muted)]">Please complete your inputs first.</div>
+                    ) : (
+                      <div className="mt-7 grid gap-6 lg:grid-cols-2">
+                        <CoverageBars rows={chartRows} />
 
-                      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-                        <ResultCard
-                          title="Death"
-                          subtitle="Family support + one-time items"
-                          need={outputs.deathNeed}
-                          existing={outputs.exDeath}
-                          accent="purple"
-                          insight={`Based on essentials × ${outputs.supportYears} years + optional buffer/debts.`}
-                        />
-                        <ResultCard
-                          title="Disability (TPD)"
-                          subtitle="Can’t work — partial replacement"
-                          need={outputs.tpdNeed}
-                          existing={outputs.exTPD}
-                          accent="teal"
-                          insight={`Based on ${replaceEssentialsPct}% of essentials for ${tpdYearsCover} years.`}
-                        />
-                        <ResultCard
-                          title="Critical Illness"
-                          subtitle="Off work + buffer"
-                          need={outputs.ciNeed}
-                          existing={outputs.exCI}
-                          accent="rose"
-                          insight={`Based on ${ciMonthsOff} months off work + optional extra buffer.`}
-                        />
-                      </div>
+                        <Surface className="p-6">
+                          <div className="text-sm font-semibold">What you keyed in</div>
+                          <div className="mt-3 text-sm text-[var(--cs-muted)] leading-relaxed">
+                            Essentials (annualised):{" "}
+                            <span className="font-semibold text-[var(--cs-text)]">${formatMoneySGD(outputs.annualEssentials)}</span>{" "}
+                            • Support years: <span className="font-semibold text-[var(--cs-text)]">{outputs.supportYears}</span>
+                            <br />
+                            Disability (TPD): <span className="font-semibold text-[var(--cs-text)]">{essentialsStillNeededPct}%</span>{" "}
+                            of essentials for <span className="font-semibold text-[var(--cs-text)]">{tpdYearsCover}</span> years
+                            <br />
+                            Critical illness: <span className="font-semibold text-[var(--cs-text)]">{ciMonthsOff}</span> months off work
+                          </div>
 
-                      <div className="rounded-[26px] bg-[color:var(--cs-card)/0.55] border border-[color:var(--cs-border)] p-6">
-                        <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-                          <div>
-                            <div className="text-sm font-semibold">What you keyed in</div>
-                            <div className="text-sm text-[var(--cs-muted)] mt-2 leading-relaxed">
-                              Essentials (annualised):{" "}
-                              <span className="font-semibold text-[var(--cs-text)]">${formatMoney(outputs.annualEssentials)}</span>{" "}
-                              • Support years:{" "}
-                              <span className="font-semibold text-[var(--cs-text)]">{outputs.supportYears}</span>{" "}
-                              • TPD:{" "}
-                              <span className="font-semibold text-[var(--cs-text)]">
-                                {replaceEssentialsPct}% × {tpdYearsCover}y
-                              </span>{" "}
-                              • CI:{" "}
-                              <span className="font-semibold text-[var(--cs-text)]">{ciMonthsOff} months</span>
+                          {benchmark ? (
+                            <div className="mt-4 text-xs text-[var(--cs-muted)] leading-relaxed">
+                              Optional benchmark (MoneySense): Death/TPD about{" "}
+                              <span className="font-semibold text-[var(--cs-text)]">${formatMoneySGD(benchmark.deathTpdThumb)}</span>{" "}
+                              (9× annual), CI about{" "}
+                              <span className="font-semibold text-[var(--cs-text)]">${formatMoneySGD(benchmark.ciThumb)}</span>{" "}
+                              (4× annual).{" "}
+                              <a className="underline" href={SOURCES.moneysenseBfpg} target="_blank" rel="noreferrer">
+                                Source
+                              </a>
                             </div>
+                          ) : null}
 
-                            {benchmark ? (
-                              <div className="text-xs text-[var(--cs-muted)] mt-3 leading-relaxed">
-                                Optional benchmark (MoneySense): Death/TPD about{" "}
-                                <span className="font-semibold text-[var(--cs-text)]">${formatMoney(benchmark.deathTpdThumb)}</span>{" "}
-                                (9× annual), CI about{" "}
-                                <span className="font-semibold text-[var(--cs-text)]">${formatMoney(benchmark.ciThumb)}</span>{" "}
-                                (4× annual).{" "}
-                                <a className="underline" href={SOURCES.moneysenseBfpg} target="_blank" rel="noreferrer">
-                                  Source
-                                </a>
-                              </div>
-                            ) : null}
-                          </div>
-
-                          <div className="flex flex-wrap gap-2">
+                          <div className="mt-5 flex flex-wrap gap-2">
                             <a className="cs-btn cs-btn-primary" href={`/contact?tool=protection&summary=${encodeURIComponent(summaryText)}`}>
                               Request a chat
                             </a>
@@ -974,360 +1043,182 @@ export default function ProtectionGapTool() {
                               Adjust inputs
                             </button>
                           </div>
-                        </div>
+                        </Surface>
                       </div>
+                    )}
+                  </Surface>
 
-                      <div className="rounded-[26px] bg-white/70 border border-[color:var(--cs-border)] p-6">
-                        <div className="text-sm font-semibold">Important note</div>
-                        <div className="mt-2 text-xs text-[var(--cs-muted)] leading-relaxed">
-                          Disclaimer: General information only. Not financial advice and not a product recommendation. This tool does not account
-                          for medical inflation, CPF, underwriting, exclusions, policy definitions, or detailed liabilities.
-                        </div>
-                      </div>
+                  {outputs ? (
+                    <div className="grid gap-6 lg:grid-cols-3">
+                      <CategorySnapshotCard
+                        title="Death"
+                        subtitle="Family support + one-time items"
+                        accent="purple"
+                        icon={
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path
+                              d="M12 21s-7-4.35-9.33-9.07C.66 7.64 3.02 4.5 6.5 4.5c1.74 0 3.22.8 4.1 2.02C11.28 5.3 12.76 4.5 14.5 4.5c3.48 0 5.84 3.14 3.83 7.43C19 16.65 12 21 12 21z"
+                              stroke="rgba(36,20,48,0.65)"
+                              strokeWidth="1.6"
+                            />
+                          </svg>
+                        }
+                        need={outputs.deathNeed}
+                        existing={outputs.exDeath}
+                        gap={outputs.deathGap}
+                        why={`Essentials × ${outputs.supportYears} years + optional buffer/debts.`}
+                      />
 
-                      <div className="flex flex-col sm:flex-row gap-2 sm:justify-between">
-                        <button type="button" className="cs-btn cs-btn-ghost" onClick={goBack}>
-                          Back
-                        </button>
-                        <a className="cs-btn cs-btn-ghost" href="/tools">
-                          Back to tools
-                        </a>
-                      </div>
-                    </>
-                  )}
+                      <CategorySnapshotCard
+                        title="Disability (TPD)"
+                        subtitle="If you can’t work — essentials still continue"
+                        accent="green"
+                        icon={
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path
+                              d="M7 11a5 5 0 0 1 10 0v1h2v9H5v-9h2v-1Z"
+                              stroke="rgba(36,20,48,0.65)"
+                              strokeWidth="1.6"
+                            />
+                            <path
+                              d="M10 11V7a2 2 0 1 1 4 0v4"
+                              stroke="rgba(36,20,48,0.65)"
+                              strokeWidth="1.6"
+                            />
+                          </svg>
+                        }
+                        need={outputs.tpdNeed}
+                        existing={outputs.exTPD}
+                        gap={outputs.tpdGap}
+                        why={`${essentialsStillNeededPct}% of essentials for ${tpdYearsCover} years.`}
+                      />
+
+                      <CategorySnapshotCard
+                        title="Critical Illness"
+                        subtitle="Time off work + buffer"
+                        accent="rose"
+                        icon={
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path
+                              d="M12 21s-7-4.35-9.33-9.07C.66 7.64 3.02 4.5 6.5 4.5c1.74 0 3.22.8 4.1 2.02C11.28 5.3 12.76 4.5 14.5 4.5c3.48 0 5.84 3.14 3.83 7.43C19 16.65 12 21 12 21z"
+                              stroke="rgba(36,20,48,0.65)"
+                              strokeWidth="1.6"
+                            />
+                            <path
+                              d="M12 8v8M8 12h8"
+                              stroke="rgba(36,20,48,0.65)"
+                              strokeWidth="1.6"
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                        }
+                        need={outputs.ciNeed}
+                        existing={outputs.exCI}
+                        gap={outputs.ciGap}
+                        why={`${ciMonthsOff} months off work + optional extra buffer.`}
+                      />
+                    </div>
+                  ) : null}
+
+                  <Surface className="p-6 sm:p-10">
+                    <div className="text-sm font-semibold">Important note</div>
+                    <div className="mt-2 text-sm text-[var(--cs-muted)] leading-relaxed">
+                      General information only. Not financial advice and not a product recommendation. This tool does not account for medical inflation, CPF, underwriting, exclusions, policy definitions, or detailed liabilities.
+                    </div>
+
+                    <div className="mt-7 flex flex-col sm:flex-row gap-2 sm:justify-between">
+                      <button type="button" className="cs-btn cs-btn-ghost" onClick={goBack}>
+                        Back
+                      </button>
+                      <a className="cs-btn cs-btn-ghost" href="/tools">
+                        Back to tools
+                      </a>
+                    </div>
+                  </Surface>
                 </div>
               ) : null}
             </div>
 
-            <aside className="space-y-4">
-              <div className="cs-card p-5 rounded-[26px] shadow-[0_18px_45px_rgba(0,0,0,0.06)] lg:sticky lg:top-6">
+            <aside className="space-y-5">
+              <Surface className="p-6 lg:sticky lg:top-6">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold">Live mini-summary</div>
-                    <div className="text-xs text-[var(--cs-muted)] mt-1">Updates as you type — keeps it clear.</div>
+                    <div className="text-xs text-[var(--cs-muted)] mt-1">Updates as you type.</div>
                   </div>
-                  {outputs ? <span className={badgeClass(outputs.riskLabel)}>{outputs.riskLabel}</span> : null}
+                  <Badge text={outputs ? "Ready" : "Draft"} />
                 </div>
 
-                <div className="mt-4 space-y-2 text-sm">
-                  <SummaryRow label="Mode" value={moneyMode === "monthly" ? "Monthly input" : "Annual input"} />
-                  <SummaryRow label="Essentials (annual)" value={annualEssentials > 0 ? `$${formatMoney(annualEssentials)}` : "—"} />
-                  <SummaryRow label="Support years" value={supportYears > 0 ? `${supportYears} years` : "—"} />
-                  <SummaryRow label="TPD" value={`${replaceEssentialsPct}% × ${tpdYearsCover}y`} />
-                  <SummaryRow label="CI" value={`${ciMonthsOff} months`} />
-                  <SummaryRow label="Dependents" value={dependents === 3 ? "3+" : String(dependents)} />
+                <div className="mt-5 space-y-2 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[var(--cs-muted)]">Mode</div>
+                    <div className="font-semibold text-[var(--cs-text)]">{moneyMode === "monthly" ? "Monthly input" : "Annual input"}</div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[var(--cs-muted)]">Essentials (annual)</div>
+                    <div className="font-semibold text-[var(--cs-text)]">{annualEssentials > 0 ? `$${formatMoneySGD(annualEssentials)}` : "—"}</div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[var(--cs-muted)]">Support years</div>
+                    <div className="font-semibold text-[var(--cs-text)]">{supportYears > 0 ? `${supportYears} years` : "—"}</div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[var(--cs-muted)]">TPD scenario</div>
+                    <div className="font-semibold text-[var(--cs-text)]">{`${essentialsStillNeededPct}% × ${tpdYearsCover}y`}</div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[var(--cs-muted)]">CI scenario</div>
+                    <div className="font-semibold text-[var(--cs-text)]">{`${ciMonthsOff} months`}</div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-[var(--cs-muted)]">Dependents</div>
+                    <div className="font-semibold text-[var(--cs-text)]">{dependents === 3 ? "3+" : String(dependents)}</div>
+                  </div>
                 </div>
 
                 {outputs ? (
-                  <div className="mt-4 rounded-[22px] bg-[color:var(--cs-card)/0.6] border border-[color:var(--cs-border)] p-4">
+                  <div className="mt-5 rounded-[30px] bg-[color:var(--cs-card)/0.55] border border-[var(--cs-border)] p-5">
                     <div className="text-xs text-[var(--cs-muted)]">Total shortfall</div>
-                    <div className="mt-1 text-2xl font-bold tracking-tight">${formatMoney(outputs.totalGap)}</div>
+                    <div className="mt-1 text-3xl font-extrabold tracking-tight">${formatMoneySGD(outputs.totalGap)}</div>
                     <div className="text-xs text-[var(--cs-muted)] mt-1">Educational estimate from your inputs.</div>
+                    <div className="mt-4 flex flex-col gap-2">
+                      <a className="cs-btn cs-btn-primary w-full justify-center" href={`/contact?tool=protection&summary=${encodeURIComponent(summaryText)}`}>
+                        Request a chat
+                      </a>
+                      <button type="button" className="cs-btn cs-btn-ghost w-full" onClick={() => setStep("needs")}>
+                        Adjust inputs
+                      </button>
+                    </div>
                   </div>
                 ) : (
-                  <div className="mt-4 rounded-[22px] bg-[color:var(--cs-card)/0.6] border border-[color:var(--cs-border)] p-4">
-                    <div className="text-xs text-[var(--cs-muted)]">Next step</div>
-                    <div className="mt-1 text-sm font-semibold text-[var(--cs-text)]">
-                      Key in essentials + support years to generate results.
-                    </div>
-                    <div className="mt-2 text-xs text-[var(--cs-muted)]">
-                      Missing:{" "}
-                      <span className="font-semibold text-[var(--cs-text)]">{readiness.missing.join(", ") || "—"}</span>
-                    </div>
+                  <div className="mt-5 rounded-[30px] bg-[color:var(--cs-card)/0.55] border border-[var(--cs-border)] p-5">
+                    <div className="text-xs text-[var(--cs-muted)]">Starter order</div>
+                    <ol className="mt-2 list-decimal pl-5 text-sm text-[var(--cs-muted)] space-y-1">
+                      <li>Age + dependents</li>
+                      <li>Essentials + support years</li>
+                      <li>Set CI months</li>
+                      <li>Adjust TPD scenario</li>
+                    </ol>
                   </div>
                 )}
-              </div>
+              </Surface>
 
-              <div className="cs-card p-5 rounded-[26px]">
-                <div className="text-sm font-semibold">Make it beginner-friendly</div>
-                <div className="text-xs text-[var(--cs-muted)] mt-1">If you’re guiding someone new, use this order:</div>
-                <ol className="mt-3 list-decimal pl-5 text-sm text-[var(--cs-muted)] space-y-1">
-                  <li>Essentials + support years</li>
-                  <li>Set CI months (start with 12–24)</li>
-                  <li>Adjust TPD % + years if needed</li>
-                  <li>Only then fill existing cover</li>
-                </ol>
-              </div>
-
-              <div className="cs-card p-5 rounded-[26px]">
-                <div className="text-sm font-semibold">Sources (for trust)</div>
-                <div className="mt-2 text-xs text-[var(--cs-muted)] leading-relaxed">
+              <Surface className="p-6">
+                <div className="text-sm font-semibold">Sources</div>
+                <div className="mt-2 text-sm text-[var(--cs-muted)] leading-relaxed">
                   Life expectancy hint: Singapore Department of Statistics life tables (2023–2024).{" "}
                   <a className="underline" href={SOURCES.singstatLifeTables} target="_blank" rel="noreferrer">
                     View
                   </a>
                   <br />
-                  Benchmarks: MoneySense basic financial planning guide (9× annual for Death/TPD, 4× annual for CI, up to 15% guideline).{" "}
+                  Optional benchmarks: MoneySense basic planning guide.{" "}
                   <a className="underline" href={SOURCES.moneysenseBfpg} target="_blank" rel="noreferrer">
                     View
                   </a>
                 </div>
-              </div>
+              </Surface>
             </aside>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Stepper(props: { step: StepKey; onGo: (k: StepKey) => void }) {
-  const idx = STEP_ORDER.indexOf(props.step);
-
-  const steps: Array<{ k: StepKey; label: string; sub: string }> = [
-    { k: "profile", label: "Profile", sub: "Basics + hints" },
-    { k: "needs", label: "Needs", sub: "What to protect" },
-    { k: "existing", label: "Existing", sub: "What you have" },
-    { k: "results", label: "Results", sub: "Gaps + chart" },
-  ];
-
-  return (
-    <div className="mt-4 rounded-[26px] bg-white/60 border border-[color:var(--cs-border)] p-3">
-      <div className="grid gap-2 sm:grid-cols-4">
-        {steps.map((s, i) => {
-          const active = i === idx;
-          const done = i < idx;
-          return (
-            <button
-              key={s.k}
-              type="button"
-              onClick={() => props.onGo(s.k)}
-              className={[
-                "text-left rounded-2xl px-3 py-3 transition",
-                active ? "bg-white shadow-[0_10px_25px_rgba(0,0,0,0.06)]" : "hover:bg-white/70",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold">{s.label}</div>
-                  <div className="text-xs text-[var(--cs-muted)] mt-0.5">{s.sub}</div>
-                </div>
-                <div
-                  className={[
-                    "h-9 w-9 rounded-2xl flex items-center justify-center border shrink-0",
-                    active
-                      ? "bg-[color:var(--cs-card)/0.75] border-[color:var(--cs-border)]"
-                      : done
-                      ? "bg-emerald-50 border-emerald-100"
-                      : "bg-white/60 border-[color:var(--cs-border)]",
-                  ].join(" ")}
-                >
-                  <span className="text-sm">{done ? "✓" : active ? "●" : "○"}</span>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function SummaryRow(props: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="text-[var(--cs-muted)]">{props.label}</div>
-      <div className="font-semibold text-[var(--cs-text)]">{props.value}</div>
-    </div>
-  );
-}
-
-function CoverageBarChart(props: { items: Array<{ name: string; Coverage: number; Shortfall: number }> }) {
-  const fmt = (n: number) => `$${formatMoney(n)}`;
-
-  return (
-    <div className="rounded-[28px] bg-white/75 border border-[color:var(--cs-border)] p-6 shadow-[0_14px_35px_rgba(0,0,0,0.06)]">
-      <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-        <div>
-          <div className="text-sm font-semibold">Graph view</div>
-          <div className="text-xs text-[var(--cs-muted)] mt-1">Stacked: coverage + shortfall</div>
-        </div>
-        <div className="flex items-center gap-4 text-xs text-[var(--cs-muted)]">
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/50" />
-            Coverage
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-rose-500/55" />
-            Shortfall
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 h-[260px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={props.items} layout="vertical" margin={{ top: 6, right: 18, left: 8, bottom: 6 }}>
-            <XAxis
-              type="number"
-              tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`}
-              stroke="rgba(36,20,48,0.35)"
-              fontSize={12}
-            />
-            <YAxis
-              type="category"
-              dataKey="name"
-              width={140}
-              stroke="rgba(36,20,48,0.35)"
-              fontSize={12}
-            />
-            <Tooltip
-              formatter={(value: any, name: any) => [fmt(Number(value)), String(name)]}
-              cursor={{ fill: "rgba(36,20,48,0.06)" }}
-            />
-            <Legend />
-            <Bar dataKey="Coverage" stackId="a" fill="#22c55e" radius={[10, 10, 10, 10]} />
-            <Bar dataKey="Shortfall" stackId="a" fill="#ef4444" radius={[10, 10, 10, 10]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function HeroCoverageChart(props: {
-  items: Array<{ key: string; need: number; existing: number; accent: "purple" | "teal" | "rose" }>;
-}) {
-  const maxNeed = useMemo(() => Math.max(...props.items.map((x) => x.need), 1), [props.items]);
-
-  function accentDot(accent: "purple" | "teal" | "rose") {
-    if (accent === "purple") return "bg-[rgba(108,92,231,0.35)]";
-    if (accent === "teal") return "bg-[rgba(0,184,148,0.35)]";
-    return "bg-[rgba(232,67,147,0.32)]";
-  }
-
-  return (
-    <div className="rounded-[28px] bg-white/75 border border-[color:var(--cs-border)] p-6 shadow-[0_14px_35px_rgba(0,0,0,0.06)]">
-      <div className="flex items-start justify-between gap-4 flex-col sm:flex-row">
-        <div>
-          <div className="text-sm font-semibold">Coverage summary</div>
-          <div className="text-xs text-[var(--cs-muted)] mt-1">Green = existing coverage • Red = shortfall</div>
-        </div>
-        <div className="flex items-center gap-4 text-xs text-[var(--cs-muted)]">
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/50" />
-            Existing
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-rose-500/55" />
-            Shortfall
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-5 space-y-4">
-        {props.items.map((it) => {
-          const need = Math.max(0, it.need);
-          const ex = clamp(Math.max(0, it.existing), 0, need);
-          const gap = Math.max(need - ex, 0);
-
-          const pctNeed = clamp((need / maxNeed) * 100, 2, 100);
-          const pctExWithinNeed = need <= 0 ? 0 : clamp((ex / need) * 100, 0, 100);
-          const pctGapWithinNeed = 100 - pctExWithinNeed;
-
-          return (
-            <div key={it.key} className="grid gap-3 lg:grid-cols-[180px_1fr_260px] items-center">
-              <div className="flex items-center gap-3">
-                <span
-                  className={[
-                    "h-9 w-9 rounded-2xl border border-[color:var(--cs-border)] bg-[color:var(--cs-card)/0.5] flex items-center justify-center",
-                    accentDot(it.accent),
-                  ].join(" ")}
-                />
-                <div>
-                  <div className="text-sm font-semibold">{it.key}</div>
-                  <div className="text-xs text-[var(--cs-muted)]">Need ${formatMoney(need)}</div>
-                </div>
-              </div>
-
-              <div className="rounded-full bg-[color:var(--cs-card)/0.75] border border-[color:var(--cs-border)] h-4 overflow-hidden">
-                <div className="h-full rounded-full bg-[rgba(36,20,48,0.08)]" style={{ width: `${pctNeed}%` }}>
-                  <div className="h-full bg-emerald-500/45" style={{ width: `${pctExWithinNeed}%` }} />
-                  <div className="h-full bg-rose-500/55" style={{ width: `${pctGapWithinNeed}%` }} />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-2xl bg-white/70 border border-[color:var(--cs-border)] px-3 py-2">
-                  <div className="text-[10px] text-[var(--cs-muted)]">Existing</div>
-                  <div className="text-sm font-semibold">${formatMoney(ex)}</div>
-                </div>
-                <div className="rounded-2xl bg-white/70 border border-[color:var(--cs-border)] px-3 py-2">
-                  <div className="text-[10px] text-[var(--cs-muted)]">Shortfall</div>
-                  <div className="text-sm font-semibold text-rose-700">${formatMoney(gap)}</div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ResultCard(props: {
-  title: string;
-  subtitle: string;
-  need: number;
-  existing: number;
-  accent: "purple" | "teal" | "rose";
-  insight: string;
-}) {
-  const need = Math.max(0, props.need);
-  const existing = clamp(Math.max(0, props.existing), 0, need);
-  const gap = Math.max(need - existing, 0);
-
-  const accentBg =
-    props.accent === "purple"
-      ? "bg-[rgba(108,92,231,0.10)]"
-      : props.accent === "teal"
-      ? "bg-[rgba(0,184,148,0.10)]"
-      : "bg-[rgba(232,67,147,0.09)]";
-
-  const accentStroke =
-    props.accent === "purple"
-      ? "rgba(108,92,231,0.26)"
-      : props.accent === "teal"
-      ? "rgba(0,184,148,0.26)"
-      : "rgba(232,67,147,0.24)";
-
-  return (
-    <div className="rounded-[26px] bg-white/75 border border-[color:var(--cs-border)] p-6 shadow-[0_14px_35px_rgba(0,0,0,0.06)]">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-semibold">{props.title}</div>
-          <div className="text-xs text-[var(--cs-muted)] mt-0.5">{props.subtitle}</div>
-        </div>
-        <div className={["h-10 w-10 rounded-3xl border flex items-center justify-center", accentBg].join(" ")} style={{ borderColor: accentStroke }}>
-          <div className="h-2.5 w-2.5 rounded-full" style={{ background: accentStroke }} />
-        </div>
-      </div>
-
-      <div className="mt-5 grid grid-cols-2 gap-3">
-        <div className="rounded-2xl bg-[color:var(--cs-card)/0.55] border border-[color:var(--cs-border)] p-4">
-          <div className="text-[10px] text-[var(--cs-muted)]">Need</div>
-          <div className="text-lg font-bold tracking-tight">${formatMoney(need)}</div>
-        </div>
-        <div className="rounded-2xl bg-[color:var(--cs-card)/0.55] border border-[color:var(--cs-border)] p-4">
-          <div className="text-[10px] text-[var(--cs-muted)]">Shortfall</div>
-          <div className={["text-lg font-bold tracking-tight", gap > 0 ? "text-rose-700" : "text-emerald-700"].join(" ")}>
-            ${formatMoney(gap)}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 rounded-2xl bg-white/70 border border-[color:var(--cs-border)] p-4">
-        <div className="text-xs text-[var(--cs-muted)]">Why this number</div>
-        <div className="text-sm text-[var(--cs-text)] font-semibold mt-1">{props.insight}</div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <div className="rounded-2xl bg-white/70 border border-[color:var(--cs-border)] p-4">
-          <div className="text-[10px] text-[var(--cs-muted)]">Existing</div>
-          <div className="text-sm font-semibold">${formatMoney(existing)}</div>
-        </div>
-        <div className="rounded-2xl bg-white/70 border border-[color:var(--cs-border)] p-4">
-          <div className="text-[10px] text-[var(--cs-muted)]">Shortfall</div>
-          <div className="text-sm font-semibold text-rose-700">${formatMoney(gap)}</div>
         </div>
       </div>
     </div>
